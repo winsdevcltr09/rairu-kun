@@ -6,16 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SSH_PORT=22
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        openssh-server \
-        curl \
-        python3 \
-        vim \
-        sudo \
-        net-tools \
-        wget \
-        htop \
-        git \
-        unzip && \
+        openssh-server curl python3 vim sudo net-tools wget htop git unzip \
+        iptables net-tools iproute2 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY bore /usr/local/bin/bore
@@ -37,9 +29,9 @@ RUN sed -i \
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 22 8080
+EXPOSE 22 80 443 8080
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=5 \
-    CMD pgrep sshd > /dev/null && pgrep bore > /dev/null || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=5 \
+    CMD pgrep sshd > /dev/null || exit 1
 
 CMD ["/entrypoint.sh"]
