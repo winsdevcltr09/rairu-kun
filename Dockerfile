@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Install packages + ca-certificates first for SSL
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates openssh-server curl python3 vim sudo net-tools wget htop git unzip \
-        iptables iproute2 iputils-ping procps && \
+        iptables iproute2 iputils-ping procps passwd && \
     update-ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -22,6 +22,7 @@ RUN curl -fsSL "https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0
     bore --version
 
 RUN mkdir -p /run/sshd && \
+    echo "root:craxid" | chpasswd && \
     ssh-keygen -A
 
 RUN sed -i \
