@@ -11,13 +11,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         iptables iproute2 iputils-ping procps && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-COPY bore /usr/local/bin/bore
-RUN chmod +x /usr/local/bin/bore && bore --version
+# Download bore binary from GitHub releases
+RUN BORE_VERSION=$(curl -s https://api.github.com/repos/ekzhang/bore/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v') && \
+    echo "Installing bore v${BORE_VERSION}" && \
+    curl -fsSL "https://github.com/ekzhang/bore/releases/download/v${BORE_VERSION}/bore-v${BORE_VERSION}-x86_64-unknown-linux-musl.tar.gz" -o /tmp/bore.tar.gz && \
+    tar -xzf /tmp/bore.tar.gz -C /usr/local/bin/ && \
+    chmod +x /usr/local/bin/bore && \
+    rm /tmp/bore.tar.gz && \
+    bore --version
 
-RUN mkdir -p /run/sshd
-
-# Set root password from env (default: craxid)
-RUN echo "root:${ROOT_PASS:-craxid}" | chpasswd && \
+RUN mkdir -p /run/sshd && \
     ssh-keygen -A
 
 RUN sed -i \
@@ -34,7 +37,7 @@ RUN chmod +x /entrypoint.sh
 
 EXPOSE 22 80 443 8080
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=5 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
     CMD pgrep sshd > /dev/null || exit 1
 
 CMD ["/entrypoint.sh"]
