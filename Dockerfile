@@ -1,7 +1,7 @@
 FROM ubuntu:20.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    NTFY_TOPIC=NotifPort \
+    NTFY_TOPIC=NotifPortxyz \
     BORE_SERVER=bore.pub \
     SSH_PORT=22
 
