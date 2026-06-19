@@ -3,18 +3,21 @@ FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive \
     NTFY_TOPIC=NotifPortxyz \
     BORE_SERVER=bore.pub \
+    ROOT_PASS=craxid \
     SSH_PORT=22
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         openssh-server curl python3 vim sudo net-tools wget htop git unzip \
-        iptables net-tools iproute2 && \
+        iptables iproute2 iputils-ping procps && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY bore /usr/local/bin/bore
 RUN chmod +x /usr/local/bin/bore && bore --version
 
-RUN mkdir -p /run/sshd && \
-    echo "root:craxid" | chpasswd && \
+RUN mkdir -p /run/sshd
+
+# Set root password from env (default: craxid)
+RUN echo "root:${ROOT_PASS:-craxid}" | chpasswd && \
     ssh-keygen -A
 
 RUN sed -i \
