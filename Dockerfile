@@ -6,15 +6,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ROOT_PASS=craxid \
     SSH_PORT=22
 
+# Install packages + ca-certificates first for SSL
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        openssh-server curl python3 vim sudo net-tools wget htop git unzip \
+        ca-certificates openssh-server curl python3 vim sudo net-tools wget htop git unzip \
         iptables iproute2 iputils-ping procps && \
+    update-ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Download bore binary from GitHub releases
-RUN BORE_VERSION=$(curl -s https://api.github.com/repos/ekzhang/bore/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v') && \
-    echo "Installing bore v${BORE_VERSION}" && \
-    curl -fsSL "https://github.com/ekzhang/bore/releases/download/v${BORE_VERSION}/bore-v${BORE_VERSION}-x86_64-unknown-linux-musl.tar.gz" -o /tmp/bore.tar.gz && \
+# Download bore binary (fixed version, x86_64 musl static binary)
+RUN curl -fsSL "https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-unknown-linux-musl.tar.gz" \
+        -o /tmp/bore.tar.gz && \
     tar -xzf /tmp/bore.tar.gz -C /usr/local/bin/ && \
     chmod +x /usr/local/bin/bore && \
     rm /tmp/bore.tar.gz && \
