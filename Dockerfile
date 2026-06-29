@@ -2,24 +2,20 @@ FROM ubuntu:20.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NTFY_TOPIC=NotifPortxyz \
-    BORE_SERVER=bore.pub \
+    CLOUDFLARE_TUNNEL_TOKEN="" \
     ROOT_PASS=craxid \
     SSH_PORT=22
 
-# Install packages + ca-certificates first for SSL
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates openssh-server curl python3 vim sudo net-tools wget htop git unzip \
         iptables iproute2 iputils-ping procps passwd && \
     update-ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Download bore binary (fixed version, x86_64 musl static binary)
-RUN curl -fsSL "https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-unknown-linux-musl.tar.gz" \
-        -o /tmp/bore.tar.gz && \
-    tar -xzf /tmp/bore.tar.gz -C /usr/local/bin/ && \
-    chmod +x /usr/local/bin/bore && \
-    rm /tmp/bore.tar.gz && \
-    bore --version
+RUN curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" \
+        -o /usr/local/bin/cloudflared && \
+    chmod +x /usr/local/bin/cloudflared && \
+    cloudflared --version
 
 RUN mkdir -p /run/sshd && \
     echo "root:craxid" | chpasswd && \
@@ -37,7 +33,7 @@ RUN sed -i \
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 22 80 443 8080
+EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
     CMD pgrep sshd > /dev/null || exit 1
