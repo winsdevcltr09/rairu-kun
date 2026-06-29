@@ -5,8 +5,7 @@ ROOT_PASS="${ROOT_PASS:-craxid}"
 CF_HOST="methatech.eu.org"
 CF_SSH_HOST="ssh.methatech.eu.org"
 
-# cloudflared membaca TUNNEL_TOKEN secara otomatis dari env
-# Kita set dari CLOUDFLARE_TUNNEL_TOKEN agar fleksibel
+# cloudflared membaca TUNNEL_TOKEN dari env secara otomatis
 export TUNNEL_TOKEN="${TUNNEL_TOKEN:-${CLOUDFLARE_TUNNEL_TOKEN:-}}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
@@ -20,8 +19,16 @@ notify() {
     -d "$body" > /dev/null 2>&1 || true
 }
 
+token_status() {
+  if [ -n "$TUNNEL_TOKEN" ]; then
+    echo "SET"
+  else
+    echo "EMPTY"
+  fi
+}
+
 setup_firewall() {
-  log "=== Mengaktifkan Firewall ==="
+  log "=== Firewall ==="
   if ! iptables -L INPUT -n > /dev/null 2>&1; then
     log "iptables tidak tersedia — dilewati"
     return 0
@@ -38,63 +45,72 @@ setup_firewall() {
   iptables -A INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
   iptables -A INPUT -p tcp --dport 8080 -j ACCEPT 2>/dev/null || true
   iptables -A INPUT -p icmp --icmp-type echo-request -j ACCEPT 2>/dev/null || true
-  log "✅ Firewall aktif"
+  log "Firewall aktif"
 }
 
 cloudflare_tunnel() {
-  log "=== Memulai Cloudflare Tunnel ==="
-  log "TUNNEL_TOKEN set: $([ -n "$TUNNEL_TOKEN" ] && echo YES (${#TUNNEL_TOKEN} chars) || echo NO)"
+  log "=== Cloudflare Tunnel ==="
+  local status
+  status=$(token_status)
+  log "TUNNEL_TOKEN: $status"
 
   if [ -z "$TUNNEL_TOKEN" ]; then
-    log "❌ TUNNEL_TOKEN kosong! Set CLOUDFLARE_TUNNEL_TOKEN atau TUNNEL_TOKEN di Railway."
-    notify "❌ Tunnel Gagal" "TUNNEL_TOKEN tidak diset di Railway. Tambahkan env var CLOUDFLARE_TUNNEL_TOKEN." "urgent" "x"
+    log "ERROR: TUNNEL_TOKEN kosong. Set CLOUDFLARE_TUNNEL_TOKEN di Railway."
+    notify "ERROR Tunnel" "TUNNEL_TOKEN kosong. Set env CLOUDFLARE_TUNNEL_TOKEN di Railway." "urgent" "x"
     return 1
   fi
 
   while true; do
-    log "🔄 Menjalankan cloudflared tunnel run..."
+    log "Menjalankan: cloudflared tunnel run --no-autoupdate"
     > /tmp/cloudflared.log
 
-    # cloudflared membaca $TUNNEL_TOKEN otomatis dari environment
+    # TUNNEL_TOKEN sudah di-export, cloudflared baca otomatis
     cloudflared tunnel run --no-autoupdate 2>&1 | tee /tmp/cloudflared.log &
     CF_PID=$!
 
-    # Tunggu koneksi berhasil (max 120 detik)
     local ready=0
-    for i in $(seq 1 120); do
+    local i=0
+    while [ $i -lt 120 ]; do
       sleep 1
-      if grep -qiE "Registered tunnel connection|registered connection|conns=[1-9]|Connection registered|connected" /tmp/cloudflared.log 2>/dev/null; then
+      i=$((i + 1))
+
+      if grep -qiE "Registered tunnel connection|registered connection|conns=[1-9]|Connection registered" /tmp/cloudflared.log 2>/dev/null; then
         ready=1
-        log "✅ Tunnel terhubung setelah ${i}s"
+        log "Tunnel TERHUBUNG setelah ${i}s"
         break
       fi
+
       if grep -qiE "invalid token|bad token|failed to unmarshal|error parsing|unable to parse" /tmp/cloudflared.log 2>/dev/null; then
-        log "❌ Token tidak valid!"
+        log "ERROR: Token tidak valid!"
         kill $CF_PID 2>/dev/null || true
-        notify "❌ Token Invalid" "Cek nilai CLOUDFLARE_TUNNEL_TOKEN di Railway." "urgent" "x"
-        sleep 30
+        notify "ERROR Token" "Token tidak valid. Cek CLOUDFLARE_TUNNEL_TOKEN di Railway." "urgent" "x"
+        sleep 60
         break
       fi
-      # Log progress setiap 10 detik
-      [ $((i % 10)) -eq 0 ] && log "  ... menunggu tunnel (${i}s)"
+
+      if [ $((i % 15)) -eq 0 ]; then
+        log "Menunggu tunnel... ${i}s"
+        tail -3 /tmp/cloudflared.log 2>/dev/null | while read -r line; do log "  > $line"; done
+      fi
     done
 
     if [ "$ready" = "1" ]; then
-      local UPTIME=$(uptime -p 2>/dev/null || echo 'running')
-      local MSG="Ubuntu 20.04 VPS AKTIF via Cloudflare Tunnel
+      local UPTIME
+      UPTIME=$(uptime -p 2>/dev/null || echo 'running')
+      notify "VPS ONLINE" "Ubuntu VPS aktif via Cloudflare!
 
-SSH  : ssh root@${CF_SSH_HOST}
-       (butuh cloudflared di PC kamu)
-Pass : ${ROOT_PASS}
-HTTP : https://${CF_HOST}
+SSH: ssh root@${CF_SSH_HOST}
+Pass: ${ROOT_PASS}
+HTTP: https://${CF_HOST}
 
 ~/.ssh/config:
 Host ${CF_SSH_HOST}
     ProxyCommand cloudflared access ssh --hostname %h
     User root
 
-Up: $UPTIME"
-      notify "✅ VPS ONLINE!" "$MSG" "high" "computer,key,white_check_mark"
+Up: $UPTIME" "high" "computer,key"
+    else
+      log "Tunnel tidak ready setelah timeout. Retry..."
     fi
 
     wait $CF_PID 2>/dev/null || true
@@ -106,10 +122,11 @@ Up: $UPTIME"
 monitor_loop() {
   while true; do
     sleep 300
-    local UPTIME=$(uptime -p 2>/dev/null || echo 'n/a')
-    local MEM=$(free -m 2>/dev/null | awk '/Mem:/{printf "%dMB/%dMB", $3, $2}' || echo 'n/a')
-    local CF_OK=$(pgrep -f "cloudflared" > /dev/null && echo "AKTIF" || echo "MATI")
-    notify "📊 VPS Status" "Up: $UPTIME | RAM: $MEM | CF: $CF_OK" "min" "bar_chart"
+    local UPTIME MEM CF_OK
+    UPTIME=$(uptime -p 2>/dev/null || echo 'n/a')
+    MEM=$(free -m 2>/dev/null | awk '/Mem:/{printf "%dMB/%dMB", $3, $2}' || echo 'n/a')
+    CF_OK=$(pgrep -f "cloudflared" > /dev/null && echo "AKTIF" || echo "MATI")
+    notify "VPS Status" "Up: $UPTIME | RAM: $MEM | CF: $CF_OK" "min" "bar_chart"
   done
 }
 
@@ -119,16 +136,15 @@ log "  Ubuntu VPS | Cloudflare Tunnel"
 log "  Host  : $CF_HOST"
 log "  SSH   : $CF_SSH_HOST"
 log "  ntfy  : $NTFY_TOPIC"
-log "  Token : $([ -n "$TUNNEL_TOKEN" ] && echo "SET (${#TUNNEL_TOKEN} chars)" || echo "EMPTY!")"
+log "  Token : $(token_status)"
 log "====================================="
 
-notify "🚀 VPS Starting..." "Boot via Cloudflare Tunnel | ntfy: $NTFY_TOPIC" "default" "rocket"
+notify "VPS Starting..." "Boot via Cloudflare | ntfy: $NTFY_TOPIC" "default" "rocket"
 
 echo "root:${ROOT_PASS}" | chpasswd 2>/dev/null || true
 /usr/sbin/sshd && log "SSH daemon started"
 setup_firewall
 
-# Placeholder HTTP server port 80
 python3 -c "
 import http.server, socketserver, threading, time
 class H(http.server.BaseHTTPRequestHandler):
