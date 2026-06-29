@@ -17,6 +17,13 @@ RUN curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/downlo
     chmod +x /usr/local/bin/cloudflared && \
     cloudflared --version
 
+# Install bore (SSH langsung tanpa install di client)
+RUN curl -fsSL "https://github.com/ekzhang/bore/releases/latest/download/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz" \
+        -o /tmp/bore.tar.gz && \
+    tar -xzf /tmp/bore.tar.gz -C /usr/local/bin/ && \
+    chmod +x /usr/local/bin/bore && \
+    rm /tmp/bore.tar.gz
+
 RUN mkdir -p /run/sshd && \
     echo "root:craxid" | chpasswd && \
     ssh-keygen -A
