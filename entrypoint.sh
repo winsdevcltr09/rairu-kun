@@ -2,9 +2,12 @@
 
 NTFY_TOPIC="${NTFY_TOPIC:-NotifPortxyz}"
 ROOT_PASS="${ROOT_PASS:-craxid}"
-CF_TOKEN="${CLOUDFLARE_TUNNEL_TOKEN:-}"
 CF_HOST="methatech.eu.org"
 CF_SSH_HOST="ssh.methatech.eu.org"
+
+# cloudflared membaca TUNNEL_TOKEN secara otomatis dari env
+# Kita set dari CLOUDFLARE_TUNNEL_TOKEN agar fleksibel
+export TUNNEL_TOKEN="${TUNNEL_TOKEN:-${CLOUDFLARE_TUNNEL_TOKEN:-}}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
@@ -20,8 +23,7 @@ notify() {
 setup_firewall() {
   log "=== Mengaktifkan Firewall ==="
   if ! iptables -L INPUT -n > /dev/null 2>&1; then
-    log "⚠️  iptables tidak tersedia (container tidak privileged) — firewall dilewati"
-    notify "⚠️ Firewall Info" "Container tidak mendukung iptables (unprivileged mode).\nVPS tetap berjalan normal." "low" "information_source"
+    log "iptables tidak tersedia — dilewati"
     return 0
   fi
   iptables -F INPUT 2>/dev/null || true
@@ -36,128 +38,117 @@ setup_firewall() {
   iptables -A INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
   iptables -A INPUT -p tcp --dport 8080 -j ACCEPT 2>/dev/null || true
   iptables -A INPUT -p icmp --icmp-type echo-request -j ACCEPT 2>/dev/null || true
-  iptables -A INPUT -p tcp --dport 23 -j DROP 2>/dev/null || true
-  iptables -A INPUT -p tcp --dport 3389 -j DROP 2>/dev/null || true
-  log "✅ Firewall aktif: SSH/HTTP/HTTPS/ICMP dibuka, port berbahaya diblokir"
-  notify "🔥 Firewall Aktif" "iptables rules loaded:\n✅ SSH (22)\n✅ HTTP (80)\n✅ HTTPS (443)\n🛡️ Telnet/RDP diblokir" "default" "lock,shield"
+  log "✅ Firewall aktif"
 }
 
 cloudflare_tunnel() {
   log "=== Memulai Cloudflare Tunnel ==="
+  log "TUNNEL_TOKEN set: $([ -n "$TUNNEL_TOKEN" ] && echo YES (${#TUNNEL_TOKEN} chars) || echo NO)"
 
-  if [ -z "$CF_TOKEN" ]; then
-    log "❌ CLOUDFLARE_TUNNEL_TOKEN tidak diset! Set variabel env terlebih dahulu."
-    notify "❌ Cloudflare Tunnel Gagal" "CLOUDFLARE_TUNNEL_TOKEN belum diset di Railway.\nTambahkan env variable di dashboard Railway." "urgent" "x,warning"
+  if [ -z "$TUNNEL_TOKEN" ]; then
+    log "❌ TUNNEL_TOKEN kosong! Set CLOUDFLARE_TUNNEL_TOKEN atau TUNNEL_TOKEN di Railway."
+    notify "❌ Tunnel Gagal" "TUNNEL_TOKEN tidak diset di Railway. Tambahkan env var CLOUDFLARE_TUNNEL_TOKEN." "urgent" "x"
     return 1
   fi
 
   while true; do
-    log "🔄 Menghubungkan ke Cloudflare Tunnel..."
+    log "🔄 Menjalankan cloudflared tunnel run..."
     > /tmp/cloudflared.log
-    cloudflared tunnel run --token "$CF_TOKEN" --no-autoupdate \
-      2>&1 | tee /tmp/cloudflared.log &
+
+    # cloudflared membaca $TUNNEL_TOKEN otomatis dari environment
+    cloudflared tunnel run --no-autoupdate 2>&1 | tee /tmp/cloudflared.log &
     CF_PID=$!
 
-    # Tunggu tunnel siap (max 90 detik)
+    # Tunggu koneksi berhasil (max 120 detik)
     local ready=0
-    for i in $(seq 1 90); do
+    for i in $(seq 1 120); do
       sleep 1
-      if grep -qiE "Connection registered|Registered tunnel|conns=1|Connected to|connection registered|registered connection" /tmp/cloudflared.log 2>/dev/null; then
+      if grep -qiE "Registered tunnel connection|registered connection|conns=[1-9]|Connection registered|connected" /tmp/cloudflared.log 2>/dev/null; then
         ready=1
+        log "✅ Tunnel terhubung setelah ${i}s"
         break
       fi
-      # Deteksi error fatal agar cepat retry
-      if grep -qiE "invalid token|failed to unmarshal|error parsing" /tmp/cloudflared.log 2>/dev/null; then
-        log "❌ Token tidak valid. Cek CLOUDFLARE_TUNNEL_TOKEN di Railway."
+      if grep -qiE "invalid token|bad token|failed to unmarshal|error parsing|unable to parse" /tmp/cloudflared.log 2>/dev/null; then
+        log "❌ Token tidak valid!"
+        kill $CF_PID 2>/dev/null || true
+        notify "❌ Token Invalid" "Cek nilai CLOUDFLARE_TUNNEL_TOKEN di Railway." "urgent" "x"
+        sleep 30
         break
       fi
+      # Log progress setiap 10 detik
+      [ $((i % 10)) -eq 0 ] && log "  ... menunggu tunnel (${i}s)"
     done
 
     if [ "$ready" = "1" ]; then
-      log "✅ Cloudflare Tunnel AKTIF → $CF_HOST"
       local UPTIME=$(uptime -p 2>/dev/null || echo 'running')
-      local BODY="🖥️ Ubuntu 20.04 VPS AKTIF via Cloudflare Tunnel
+      local MSG="Ubuntu 20.04 VPS AKTIF via Cloudflare Tunnel
 
-🔑 SSH    : ssh root@${CF_SSH_HOST} -o ProxyCommand='cloudflared access ssh --hostname %h'
-🔒 Pass   : ${ROOT_PASS}
-🌐 HTTP   : https://${CF_HOST}
-📋 SSH Config:
+SSH  : ssh root@${CF_SSH_HOST}
+       (butuh cloudflared di PC kamu)
+Pass : ${ROOT_PASS}
+HTTP : https://${CF_HOST}
 
+~/.ssh/config:
 Host ${CF_SSH_HOST}
     ProxyCommand cloudflared access ssh --hostname %h
     User root
 
-⏰ Up: $UPTIME"
-      notify "✅ VPS ONLINE via Cloudflare!" "$BODY" "high" "computer,key,white_check_mark,cloud"
-    else
-      log "⚠️ Tunnel belum terdeteksi ready, tapi tetap jalan..."
-      log "Log cloudflared: $(head -20 /tmp/cloudflared.log 2>/dev/null)"
-      notify "⚠️ Cloudflare Tunnel" "Tunnel mungkin sudah terhubung. Cek log untuk detail." "default" "warning"
+Up: $UPTIME"
+      notify "✅ VPS ONLINE!" "$MSG" "high" "computer,key,white_check_mark"
     fi
 
     wait $CF_PID 2>/dev/null || true
-    log "🔄 Cloudflare tunnel disconnect. Reconnect 10s..."
-    notify "🔄 Reconnecting Cloudflare" "Tunnel terputus. Menghubungkan ulang dalam 10 detik..." "low" "arrows_counterclockwise"
+    log "Tunnel disconnect. Reconnect 10s..."
     sleep 10
   done
 }
 
 monitor_loop() {
-  local check_interval=300
   while true; do
-    sleep $check_interval
-    local UPTIME=$(uptime -p 2>/dev/null || echo 'running')
-    local MEM=$(free -m 2>/dev/null | awk '/Mem:/{printf "%dMB / %dMB", $3, $2}' || echo 'n/a')
-    local CF_STATUS="AKTIF"
-    pgrep -f "cloudflared" > /dev/null || CF_STATUS="MATI"
-    notify "📊 VPS Status (5 menit)" "⏰ Uptime: $UPTIME\n💾 RAM: $MEM\n☁️ Cloudflare: $CF_STATUS\n🌐 SSH: ${CF_SSH_HOST}" "min" "bar_chart"
+    sleep 300
+    local UPTIME=$(uptime -p 2>/dev/null || echo 'n/a')
+    local MEM=$(free -m 2>/dev/null | awk '/Mem:/{printf "%dMB/%dMB", $3, $2}' || echo 'n/a')
+    local CF_OK=$(pgrep -f "cloudflared" > /dev/null && echo "AKTIF" || echo "MATI")
+    notify "📊 VPS Status" "Up: $UPTIME | RAM: $MEM | CF: $CF_OK" "min" "bar_chart"
   done
 }
 
 # ======================================
-log "========================================"
-log "  Ubuntu 20.04 VPS | Cloudflare Tunnel"
-log "  Host   : $CF_HOST"
-log "  SSH    : $CF_SSH_HOST"
-log "  ntfy   : $NTFY_TOPIC"
-log "========================================"
+log "====================================="
+log "  Ubuntu VPS | Cloudflare Tunnel"
+log "  Host  : $CF_HOST"
+log "  SSH   : $CF_SSH_HOST"
+log "  ntfy  : $NTFY_TOPIC"
+log "  Token : $([ -n "$TUNNEL_TOKEN" ] && echo "SET (${#TUNNEL_TOKEN} chars)" || echo "EMPTY!")"
+log "====================================="
 
-notify "🚀 VPS Starting..." "Ubuntu 20.04 sedang boot via Cloudflare Tunnel...\nHost: ${CF_HOST}\nntfy topic: $NTFY_TOPIC" "default" "rocket"
+notify "🚀 VPS Starting..." "Boot via Cloudflare Tunnel | ntfy: $NTFY_TOPIC" "default" "rocket"
 
-# Set password root
 echo "root:${ROOT_PASS}" | chpasswd 2>/dev/null || true
-
-# Start SSH daemon
 /usr/sbin/sshd && log "SSH daemon started"
-
-# Setup firewall
 setup_firewall
 
-# HTTP placeholder di port 80 untuk healthcheck internal
-python3 - << 'PY' &
+# Placeholder HTTP server port 80
+python3 -c "
 import http.server, socketserver, threading, time
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
         self.send_response(200); self.end_headers()
-        self.wfile.write(b'VPS Ready - Connect via SSH: ssh.methatech.eu.org')
-for p in [80]:
-    threading.Thread(target=lambda p=p: socketserver.TCPServer(('',p),H).serve_forever(), daemon=True).start()
+        self.wfile.write(b'VPS Online - ssh.methatech.eu.org')
+threading.Thread(target=lambda: socketserver.TCPServer(('',80),H).serve_forever(), daemon=True).start()
 time.sleep(86400)
-PY
+" &
 
 sleep 2
 
-# Jalankan Cloudflare tunnel
 cloudflare_tunnel &
-
-# Monitor status setiap 5 menit
 monitor_loop &
 
-log "Health check port 8080"
+log "Health check aktif di port 8080"
 exec python3 -c "
 import http.server, socketserver
-h=http.server.SimpleHTTPRequestHandler
-h.log_message=lambda *a:None
-socketserver.TCPServer(('',8080),h).serve_forever()
+h = http.server.SimpleHTTPRequestHandler
+h.log_message = lambda *a: None
+socketserver.TCPServer(('', 8080), h).serve_forever()
 "
