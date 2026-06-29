@@ -61,11 +61,11 @@ cloudflare_tunnel() {
   fi
 
   while true; do
-    log "Menjalankan: cloudflared tunnel run --no-autoupdate"
+    log "Menjalankan: cloudflared tunnel run"
     > /tmp/cloudflared.log
 
     # TUNNEL_TOKEN sudah di-export, cloudflared baca otomatis
-    cloudflared tunnel run --no-autoupdate 2>&1 | tee /tmp/cloudflared.log &
+    cloudflared tunnel run 2>&1 | tee /tmp/cloudflared.log &
     CF_PID=$!
 
     local ready=0
