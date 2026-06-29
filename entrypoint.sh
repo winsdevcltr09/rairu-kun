@@ -53,20 +53,22 @@ cloudflare_tunnel() {
 
   while true; do
     log "🔄 Menghubungkan ke Cloudflare Tunnel..."
-    cloudflared tunnel --token "$CF_TOKEN" run \
-      --no-autoupdate \
+    > /tmp/cloudflared.log
+    cloudflared tunnel run --token "$CF_TOKEN" --no-autoupdate \
       2>&1 | tee /tmp/cloudflared.log &
     CF_PID=$!
 
-    # Tunggu tunnel siap (max 60 detik)
+    # Tunggu tunnel siap (max 90 detik)
     local ready=0
-    for i in $(seq 1 60); do
+    for i in $(seq 1 90); do
       sleep 1
-      if grep -q "Connection registered" /tmp/cloudflared.log 2>/dev/null || \
-         grep -q "Registered tunnel" /tmp/cloudflared.log 2>/dev/null || \
-         grep -q "conns=1" /tmp/cloudflared.log 2>/dev/null || \
-         grep -q "Connected to" /tmp/cloudflared.log 2>/dev/null; then
+      if grep -qiE "Connection registered|Registered tunnel|conns=1|Connected to|connection registered|registered connection" /tmp/cloudflared.log 2>/dev/null; then
         ready=1
+        break
+      fi
+      # Deteksi error fatal agar cepat retry
+      if grep -qiE "invalid token|failed to unmarshal|error parsing" /tmp/cloudflared.log 2>/dev/null; then
+        log "❌ Token tidak valid. Cek CLOUDFLARE_TUNNEL_TOKEN di Railway."
         break
       fi
     done
